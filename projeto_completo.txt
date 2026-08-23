@@ -1,0 +1,638 @@
+﻿==================================================
+FILE: .mvn\wrapper\maven-wrapper.properties
+==================================================
+wrapperVersion=3.3.4
+distributionType=only-script
+distributionUrl=https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/3.9.16/apache-maven-3.9.16-bin.zip
+
+
+
+
+==================================================
+FILE: src\main\java\com\github\dev\deyvid\finance\budget_voice_ai\config\BudgetToolsConfig.java
+==================================================
+package com.github.dev.deyvid.finance.budget_voice_ai.config;
+
+import com.github.dev.deyvid.finance.budget_voice_ai.dto.CategoryExpenseRequest;
+import com.github.dev.deyvid.finance.budget_voice_ai.dto.RegisterTransactionRequest;
+import com.github.dev.deyvid.finance.budget_voice_ai.model.Transaction;
+import com.github.dev.deyvid.finance.budget_voice_ai.service.TransactionService;
+import org.springframework.ai.tool.annotation.Tool;
+import org.springframework.context.annotation.Configuration;
+
+import java.math.BigDecimal;
+
+@Configuration
+public class BudgetToolsConfig {
+
+    private final TransactionService transactionService;
+
+    public BudgetToolsConfig(TransactionService transactionService) {
+        this.transactionService = transactionService;
+    }
+
+    @Tool(description = "Registra uma nova transaÃ§Ã£o financeira (receita ou despesa) no banco de dados.")
+    public String registerTransactionTool(RegisterTransactionRequest request) {
+        Transaction saved = transactionService.saveTransaction(
+                request.description(),
+                request.amount(),
+                request.category(),
+                request.type()
+        );
+        return String.format("TransaÃ§Ã£o registrada com sucesso: ID %d, %s de R$ %.2f na categoria %s.",
+                saved.getId(), saved.getType(), saved.getAmount(), saved.getCategory());
+    }
+
+    @Tool(description = "Consulta o saldo financeiro total atual (receitas acumuladas menos despesas).")
+    public String getBalanceTool() {
+        BigDecimal balance = transactionService.getBalance();
+        return String.format("O saldo financeiro atual Ã© de R$ %.2f.", balance);
+    }
+
+    @Tool(description = "Calcula o total de despesas gastas em uma categoria especÃ­fica.")
+    public String getExpensesByCategoryTool(CategoryExpenseRequest request) {
+        BigDecimal total = transactionService.getTotalExpensesByCategory(request.category());
+        return String.format("O total gasto na categoria '%s' foi de R$ %.2f.", request.category(), total);
+    }
+}
+
+
+
+==================================================
+FILE: src\main\java\com\github\dev\deyvid\finance\budget_voice_ai\controller\BudgetVoiceController.java
+==================================================
+package com.github.dev.deyvid.finance.budget_voice_ai.controller;
+
+import com.github.dev.deyvid.finance.budget_voice_ai.model.Transaction;
+import com.github.dev.deyvid.finance.budget_voice_ai.service.ChatClientService;
+import com.github.dev.deyvid.finance.budget_voice_ai.service.TransactionService;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
+
+import java.util.List;
+import java.util.Map;
+
+@RestController
+@RequestMapping("/api/budget")
+@RequiredArgsConstructor
+public class BudgetVoiceController {
+
+    private final ChatClientService chatClientService;
+    private final TransactionService transactionService;
+
+    @PostMapping("/chat")
+    public ResponseEntity<Map<String, String>> processTextCommand(@RequestBody Map<String, String> payload) {
+        String message = payload.get("message");
+        if (message == null || message.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "O campo 'message' Ã© obrigatÃ³rio."));
+        }
+
+        String aiResponse = chatClientService.processUserInput(message);
+        return ResponseEntity.ok(Map.of("response", aiResponse));
+    }
+
+    @PostMapping(value = "/voice", consumes = {MediaType.MULTIPART_FORM_DATA_VALUE, MediaType.APPLICATION_OCTET_STREAM_VALUE})
+    public ResponseEntity<Map<String, String>> processVoiceCommand(@RequestParam("file") MultipartFile file) {
+        try {
+            if (file.isEmpty()) {
+                return ResponseEntity.badRequest().body(Map.of("error", "Envie um arquivo de Ã¡udio vÃ¡lido."));
+            }
+
+            String contentType = file.getContentType();
+            if (contentType == null || contentType.equals("application/octet-stream")) {
+                contentType = "audio/mp3";
+            }
+
+            String aiResponse = chatClientService.processAudioInput(file.getResource(), contentType);
+
+            return ResponseEntity.ok(Map.of("response", aiResponse));
+        } catch (Exception e) {
+            e.printStackTrace();
+            return ResponseEntity.status(500).body(Map.of("error", e.getMessage() != null ? e.getMessage() : "Erro desconhecido"));
+        }
+    }
+
+    @GetMapping("/transactions")
+    public ResponseEntity<List<Transaction>> getAllTransactions() {
+        return ResponseEntity.ok(transactionService.listAll());
+    }
+}
+
+
+
+==================================================
+FILE: src\main\java\com\github\dev\deyvid\finance\budget_voice_ai\dto\CategoryExpenseRequest.java
+==================================================
+package com.github.dev.deyvid.finance.budget_voice_ai.dto;
+
+import com.fasterxml.jackson.annotation.JsonPropertyDescription;
+
+public record CategoryExpenseRequest(
+        @JsonPropertyDescription("Nome da categoria a ser consultada, ex: AlimentaÃ§Ã£o, Transporte")
+        String category
+) {}
+
+
+
+==================================================
+FILE: src\main\java\com\github\dev\deyvid\finance\budget_voice_ai\dto\RegisterTransactionRequest.java
+==================================================
+package com.github.dev.deyvid.finance.budget_voice_ai.dto;
+
+import com.github.dev.deyvid.finance.budget_voice_ai.model.TransactionType;
+import com.fasterxml.jackson.annotation.JsonPropertyDescription;
+import java.math.BigDecimal;
+
+public record RegisterTransactionRequest(
+        @JsonPropertyDescription("DescriÃ§Ã£o detalhada do gasto ou ganho, ex: AlmoÃ§o no restaurante, SalÃ¡rio")
+        String description,
+
+        @JsonPropertyDescription("Valor monetÃ¡rio numÃ©rico positivo da transaÃ§Ã£o, ex: 45.50")
+        BigDecimal amount,
+
+        @JsonPropertyDescription("Categoria da transaÃ§Ã£o, ex: AlimentaÃ§Ã£o, Transporte, Moradia, SalÃ¡rio, Lazer")
+        String category,
+
+        @JsonPropertyDescription("Tipo da movimentaÃ§Ã£o: RECEITA ou DESPESA")
+        TransactionType type
+) {}
+
+
+
+==================================================
+FILE: src\main\java\com\github\dev\deyvid\finance\budget_voice_ai\model\Transaction.java
+==================================================
+package com.github.dev.deyvid.finance.budget_voice_ai.model;
+
+import jakarta.persistence.*;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.math.BigDecimal;
+import java.time.LocalDate;
+
+@Entity
+@Table(name = "transactions")
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class Transaction {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    private String description;
+    private BigDecimal amount;
+    private String category;
+    private LocalDate date;
+    @Enumerated(EnumType.STRING)
+    private TransactionType type;
+
+}
+
+
+
+==================================================
+FILE: src\main\java\com\github\dev\deyvid\finance\budget_voice_ai\model\TransactionType.java
+==================================================
+package com.github.dev.deyvid.finance.budget_voice_ai.model;
+
+public enum TransactionType {
+    RECEITA,
+    DESPESA
+}
+
+
+
+==================================================
+FILE: src\main\java\com\github\dev\deyvid\finance\budget_voice_ai\repository\TransactionRepository.java
+==================================================
+package com.github.dev.deyvid.finance.budget_voice_ai.repository;
+
+import com.github.dev.deyvid.finance.budget_voice_ai.model.Transaction;
+import com.github.dev.deyvid.finance.budget_voice_ai.model.TransactionType;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+import org.springframework.stereotype.Repository;
+
+import java.math.BigDecimal;
+
+@Repository
+public interface TransactionRepository extends JpaRepository<Transaction, Long> {
+
+    @Query("SELECT SUM(t.amount) FROM Transaction t WHERE t.type = :type")
+    BigDecimal sumAmountByType(@Param("type") TransactionType type);
+
+    @Query("SELECT SUM(t.amount) FROM Transaction t WHERE t.category = :category AND t.type = :type")
+    BigDecimal sumAmountByCategoryAndType(@Param("category") String category, @Param("type") TransactionType type);
+
+}
+
+
+
+==================================================
+FILE: src\main\java\com\github\dev\deyvid\finance\budget_voice_ai\service\ChatClientService.java
+==================================================
+package com.github.dev.deyvid.finance.budget_voice_ai.service;
+
+import com.github.dev.deyvid.finance.budget_voice_ai.tools.FinanceTools;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.core.io.Resource;
+import org.springframework.stereotype.Service;
+import org.springframework.util.MimeTypeUtils;
+
+@Service
+public class ChatClientService {
+
+    private final ChatClient chatClient;
+    private final FinanceTools financeTools;
+
+    public ChatClientService(ChatClient.Builder chatClientBuilder, FinanceTools financeTools) {
+        this.financeTools = financeTools;
+        this.chatClient = chatClientBuilder
+                .defaultSystem("""
+                    VocÃª Ã© um assistente financeiro pessoal inteligente e amigÃ¡vel.
+                    Identifique comandos de voz ou texto sobre receitas e despesas e execute a ferramenta apropriada.
+                    Sempre responda de forma clara e em portuguÃªs do Brasil.
+                """)
+                .build();
+    }
+
+    public String processUserInput(String userMessage) {
+        return this.chatClient.prompt()
+                .user(userMessage)
+                .tools(financeTools) // <--- Conecta a tool aqui tambÃ©m
+                .call()
+                .content();
+    }
+
+    public String processAudioInput(Resource audioResource, String mimeType) {
+        return this.chatClient.prompt()
+                .user(u -> u.text("Processe o comando deste Ã¡udio financeiro.")
+                        .media(MimeTypeUtils.parseMimeType(mimeType), audioResource))
+                .tools(financeTools) //
+                .call()
+                .content();
+    }
+}
+
+
+
+==================================================
+FILE: src\main\java\com\github\dev\deyvid\finance\budget_voice_ai\service\TransactionService.java
+==================================================
+package com.github.dev.deyvid.finance.budget_voice_ai.service;
+
+import com.github.dev.deyvid.finance.budget_voice_ai.model.Transaction;
+import com.github.dev.deyvid.finance.budget_voice_ai.model.TransactionType;
+import com.github.dev.deyvid.finance.budget_voice_ai.repository.TransactionRepository;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.util.List;
+
+@Service
+@RequiredArgsConstructor
+public class TransactionService {
+
+    private final TransactionRepository repository;
+
+    @Transactional
+    public Transaction saveTransaction(String description, BigDecimal amount, String category, TransactionType type) {
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("O valor da transaÃ§Ã£o deve ser positivo.");
+        }
+
+        Transaction transaction = Transaction.builder()
+                .description(description)
+                .amount(amount)
+                .category(category != null ? category.trim() : "Outros")
+                .type(type != null ? type : TransactionType.DESPESA)
+                .date(LocalDate.now())
+                .build();
+
+        return repository.save(transaction);
+    }
+
+    @Transactional(readOnly = true)
+    public BigDecimal getBalance() {
+        BigDecimal receitas = repository.sumAmountByType(TransactionType.RECEITA);
+        BigDecimal despesas = repository.sumAmountByType(TransactionType.DESPESA);
+        return receitas.subtract(despesas);
+    }
+
+    @Transactional(readOnly = true)
+    public BigDecimal getTotalExpensesByCategory(String category) {
+        return repository.sumAmountByCategoryAndType(category, TransactionType.DESPESA);
+    }
+
+    @Transactional(readOnly = true)
+    public List<Transaction> listAll() {
+        return repository.findAll();
+    }
+}
+
+
+
+==================================================
+FILE: src\main\java\com\github\dev\deyvid\finance\budget_voice_ai\tools\FinanceTools.java
+==================================================
+package com.github.dev.deyvid.finance.budget_voice_ai.tools;
+
+import com.github.dev.deyvid.finance.budget_voice_ai.model.Transaction; // O caminho da sua Entity
+import com.github.dev.deyvid.finance.budget_voice_ai.model.TransactionType;
+import com.github.dev.deyvid.finance.budget_voice_ai.repository.TransactionRepository;
+import org.springframework.ai.tool.annotation.Tool;
+import org.springframework.stereotype.Component;
+
+import java.math.BigDecimal;
+import java.time.LocalDate;
+
+@Component
+public class FinanceTools {
+
+    private final TransactionRepository transactionRepository;
+
+    public FinanceTools(TransactionRepository transactionRepository) {
+        this.transactionRepository = transactionRepository;
+    }
+
+    @Tool(description = "Registra uma nova transaÃ§Ã£o financeira.")
+    public String registerTransaction(String type, String description, BigDecimal amount, String category) {
+        Transaction transaction = Transaction.builder()
+                .type(TransactionType.valueOf(type.toUpperCase()))
+                .description(description)
+                .amount(amount)
+                .category(category)
+                .date(LocalDate.now())
+                .build();
+
+        transactionRepository.save(transaction);
+        return "TransaÃ§Ã£o salva com sucesso!";
+    }
+
+    @Tool(description = "Retorna o resumo financeiro somando as receitas ou despesas.")
+    public String getFinancialSummary(String type) {
+        TransactionType txType = TransactionType.valueOf(type.toUpperCase());
+        BigDecimal total = transactionRepository.sumAmountByType(txType);
+
+        if (total == null) {
+            total = BigDecimal.ZERO;
+        }
+
+        return "O total de " + type + " Ã© R$ " + total;
+    }
+}
+
+
+
+==================================================
+FILE: src\main\java\com\github\dev\deyvid\finance\budget_voice_ai\BudgetVoiceAiApplication.java
+==================================================
+package com.github.dev.deyvid.finance.budget_voice_ai;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class BudgetVoiceAiApplication {
+
+	public static void main(String[] args) {
+		SpringApplication.run(BudgetVoiceAiApplication.class, args);
+	}
+
+}
+
+
+
+
+==================================================
+FILE: src\main\resources\application.properties
+==================================================
+spring.application.name=budget-voice-ai
+
+# H2 Database
+spring.datasource.url=jdbc:h2:file:./data/budgetdb
+spring.datasource.driverClassName=org.h2.Driver
+spring.datasource.username=sa
+spring.datasource.password=
+spring.jpa.database-platform=org.hibernate.dialect.H2Dialect
+spring.jpa.hibernate.ddl-auto=update
+
+# H2 Console
+spring.h2.console.enabled=true
+spring.h2.console.path=/h2-console
+
+# Google Gemini AI
+spring.ai.google.genai.chat.options.model=gemini-3.6-flash
+spring.ai.google.genai.api-key=${GEMINI_API_KEY}
+
+
+
+==================================================
+FILE: src\test\java\com\github\dev\deyvid\finance\budget_voice_ai\BudgetVoiceAiApplicationTests.java
+==================================================
+package com.github.dev.deyvid.finance.budget_voice_ai;
+
+import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.context.SpringBootTest;
+
+@SpringBootTest
+class BudgetVoiceAiApplicationTests {
+
+	@Test
+	void contextLoads() {
+	}
+
+}
+
+
+
+
+==================================================
+FILE: HELP.md
+==================================================
+# Read Me First
+The following was discovered as part of building this project:
+
+* The original package name 'com.github.dev.deyvid.finance.budget-voice-ai' is invalid and this project uses 'com.github.dev.deyvid.finance.budget_voice_ai' instead.
+
+# Getting Started
+
+### Reference Documentation
+For further reference, please consider the following sections:
+
+* [Official Apache Maven documentation](https://maven.apache.org/guides/index.html)
+* [Spring Boot Maven Plugin Reference Guide](https://docs.spring.io/spring-boot/4.1.1/maven-plugin)
+* [Create an OCI image](https://docs.spring.io/spring-boot/4.1.1/maven-plugin/build-image.html)
+* [Spring Web](https://docs.spring.io/spring-boot/4.1.1/reference/web/servlet.html)
+* [Spring Data JPA](https://docs.spring.io/spring-boot/4.1.1/reference/data/sql.html#data.sql.jpa-and-spring-data)
+* [OpenAI](https://docs.spring.io/spring-ai/reference/api/chat/openai-chat.html)
+
+### Guides
+The following guides illustrate how to use some features concretely:
+
+* [Building a RESTful Web Service](https://spring.io/guides/gs/rest-service/)
+* [Serving Web Content with Spring MVC](https://spring.io/guides/gs/serving-web-content/)
+* [Building REST services with Spring](https://spring.io/guides/tutorials/rest/)
+* [Accessing Data with JPA](https://spring.io/guides/gs/accessing-data-jpa/)
+
+### Maven Parent overrides
+
+Due to Maven's design, elements are inherited from the parent POM to the project POM.
+While most of the inheritance is fine, it also inherits unwanted elements like `<license>` and `<developers>` from the parent.
+To prevent this, the project POM contains empty overrides for these elements.
+If you manually switch to a different parent and actually want the inheritance, you need to remove those overrides.
+
+
+
+
+
+==================================================
+FILE: pom.xml
+==================================================
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+	<parent>
+		<groupId>org.springframework.boot</groupId>
+		<artifactId>spring-boot-starter-parent</artifactId>
+		<version>4.1.1</version>
+		<relativePath/> <!-- lookup parent from repository -->
+	</parent>
+	<groupId>com.github.dev.deyvid.finance</groupId>
+	<artifactId>budget-voice-ai</artifactId>
+	<version>0.0.1-SNAPSHOT</version>
+	<name/>
+	<description/>
+	<url/>
+	<licenses>
+		<license/>
+	</licenses>
+	<developers>
+		<developer/>
+	</developers>
+	<scm>
+		<connection/>
+		<developerConnection/>
+		<tag/>
+		<url/>
+	</scm>
+	<properties>
+        <java.version>21</java.version>
+        <spring-ai.version>2.0.0</spring-ai.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+    </properties>
+	<dependencies>
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-google-genai</artifactId>
+        </dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-h2console</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-data-jpa</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-webmvc</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>com.h2database</groupId>
+			<artifactId>h2</artifactId>
+			<scope>runtime</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.projectlombok</groupId>
+			<artifactId>lombok</artifactId>
+			<optional>true</optional>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-data-jpa-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-webmvc-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+	</dependencies>
+	<dependencyManagement>
+		<dependencies>
+			<dependency>
+				<groupId>org.springframework.ai</groupId>
+				<artifactId>spring-ai-bom</artifactId>
+				<version>${spring-ai.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
+		</dependencies>
+	</dependencyManagement>
+
+	<build>
+		<plugins>
+			<plugin>
+				<groupId>org.springframework.boot</groupId>
+				<artifactId>spring-boot-maven-plugin</artifactId>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-compiler-plugin</artifactId>
+				<executions>
+					<execution>
+						<id>default-compile</id>
+						<phase>compile</phase>
+						<goals>
+							<goal>compile</goal>
+						</goals>
+						<configuration>
+							<annotationProcessorPaths>
+								<path>
+									<groupId>org.projectlombok</groupId>
+									<artifactId>lombok</artifactId>
+								</path>
+							</annotationProcessorPaths>
+						</configuration>
+					</execution>
+					<execution>
+						<id>default-testCompile</id>
+						<phase>test-compile</phase>
+						<goals>
+							<goal>testCompile</goal>
+						</goals>
+						<configuration>
+							<annotationProcessorPaths>
+								<path>
+									<groupId>org.projectlombok</groupId>
+									<artifactId>lombok</artifactId>
+								</path>
+							</annotationProcessorPaths>
+						</configuration>
+					</execution>
+				</executions>
+			</plugin>
+		</plugins>
+	</build>
+
+</project>
+
+
+
+
