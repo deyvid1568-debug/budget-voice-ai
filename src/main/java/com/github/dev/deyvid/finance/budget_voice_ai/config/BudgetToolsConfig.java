@@ -1,8 +1,8 @@
 package com.github.dev.deyvid.finance.budget_voice_ai.config;
 
-import com.github.dev.deyvid.finance.budget_voice_ai.dto.CategoryExpenseRequest;
 import com.github.dev.deyvid.finance.budget_voice_ai.dto.RegisterTransactionRequest;
 import com.github.dev.deyvid.finance.budget_voice_ai.model.Transaction;
+import com.github.dev.deyvid.finance.budget_voice_ai.model.TransactionType;
 import com.github.dev.deyvid.finance.budget_voice_ai.service.TransactionService;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.context.annotation.Configuration;
@@ -37,8 +37,15 @@ public class BudgetToolsConfig {
     }
 
     @Tool(description = "Calcula o total de despesas gastas em uma categoria específica.")
-    public String getExpensesByCategoryTool(CategoryExpenseRequest request) {
+    public String getExpensesByCategoryTool(RegisterTransactionRequest request) {
         BigDecimal total = transactionService.getTotalExpensesByCategory(request.category());
         return String.format("O total gasto na categoria '%s' foi de R$ %.2f.", request.category(), total);
+    }
+
+    @Tool(description = "Retorna a soma total acumulada apenas por tipo de movimentação (RECEITA ou DESPESA).")
+    public String getTotalByTypeTool(RegisterTransactionRequest request) {
+        TransactionType type = request.type() != null ? request.type() : TransactionType.DESPESA;
+        BigDecimal total = transactionService.getTotalByType(type);
+        return String.format("O total acumulado de %s é de R$ %.2f.", type, total);
     }
 }

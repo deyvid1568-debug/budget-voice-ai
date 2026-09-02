@@ -47,6 +47,12 @@ public class TransactionService {
     }
 
     @Transactional(readOnly = true)
+    public BigDecimal getTotalByType(TransactionType type) {
+        BigDecimal total = repository.sumAmountByType(type);
+        return total != null ? total : BigDecimal.ZERO;
+    }
+
+    @Transactional(readOnly = true)
     public List<Transaction> listAll() {
         return repository.findAll();
     }
